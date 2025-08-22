@@ -1,0 +1,58 @@
+import { type NextRequest, NextResponse } from "next/server"
+import { verifyToken } from "@/lib/auth"
+import { neon } from "@neondatabase/serverless"
+
+const sql = neon(process.env.DATABASE_URL!)
+
+export async function POST(request: NextRequest, { params }: { params: { postId: string } }) {
+  try {
+    const authHeader = request.headers.get("authorization")
+
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return NextResponse.json({ success: false, error: "No token provided" }, { status: 401 })
+    }
+
+    const token = authHeader.substring(7)
+    const decoded = verifyToken(token)
+
+    if (!decoded) {
+      return NextResponse.json({ success: false, error: "Invalid token" }, { status: 401 })
+    }
+
+    const { postId } = params
+    const { content } = await request.json()
+
+    if (!content || !content.trim()) {
+      return NextResponse.json({ success: false, error: "Comment content is required" }, { status: 400 })
+    }
+
+    const commentId = crypto.randomUUID()
+
+    // Insert comment
+    await sql`
+      INSERT INTO post_comments (id, post_id, user_id, content) 
+      VALUES (${commentId}, ${postId}, ${decoded.userId}, ${content.trim()})
+    `
+
+    // Update comments count
+    await sql`
+      UPDATE posts 
+      SET comments_count = comments_count + 1 
+      WHERE id = ${postId}
+    `
+
+    // Get updated comments count
+    const [post] = await sql`
+      SELECT comments_count FROM posts WHERE id = ${postId}
+    `
+
+    return NextResponse.json({
+      success: true,
+      comment_id: commentId,
+      comments_count: post.comments_count,
+    })
+  } catch (error) {
+    console.error("Comment post error:", error)
+    return NextResponse.json({ success: false, error: "Internal server error" }, { status: 500 })
+  }
+}
